@@ -8,6 +8,7 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "torchaudio",
     "transformers",
     "huggingface_hub",
+    "fastapi[standard]",
 )
 
 
@@ -15,7 +16,7 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install(
     image=image,
     gpu="T4",
     timeout=300,
-    scaledown_window=120,  # container stays warm 2 min after last request
+    scaledown_window=120,
 )
 class ShonaSTT:
     @modal.enter()
@@ -35,6 +36,28 @@ class ShonaSTT:
     @modal.method()
     def transcribe(self, audio_bytes: bytes) -> str:
         import torch
+        import torchaudio
+        import io
+
+        audio_input, sample_rate = torchaudio.load(io.BytesIO(audio_bytes))
+        inputs = self.processor(
+            audio_input.squeeze(), sampling_rate=sample_rate, return_tensors="pt"
+        ).to(self.device)
+
+        with torch.no_grad():
+            logits = self.model(**inputs).logits
+
+        predicted_ids = torch.argmax(logits, dim=-1)
+        transcription = self.processor.batch_decode(predicted_ids)[0]
+        return transcription
+
+
+@app.function(image=image)
+@modal.fastapi_endpoint(method="POST")
+def transcribe_endpoint(audio_bytes: bytes):
+    stt = ShonaSTT()
+    result = stt.transcribe.remote(audio_bytes)
+    return {"transcription": result}        import torch
         import torchaudio
         import io
 
